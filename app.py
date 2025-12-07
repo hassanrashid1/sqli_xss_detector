@@ -1,5 +1,6 @@
 import os
 # Set environment variable to use Keras 2 (tf-keras) with TensorFlow 2.16+
+# MUST be set before importing tensorflow or streamlit
 os.environ['TF_USE_LEGACY_KERAS'] = '1'
 
 import streamlit as st
@@ -148,8 +149,12 @@ def model_struct(max_len):
         GRU0 = layers.Bidirectional(
             tf.keras.layers.GRU(32, return_sequences=True, go_backwards=True)
         )(cnn1)
-    except ValueError:
+        if 'gru_status' not in st.session_state:
+            st.session_state.gru_status = "✅ GRU initialized with go_backwards=True"
+    except Exception as e:
         # Fallback for newer TF versions
+        if 'gru_status' not in st.session_state:
+            st.session_state.gru_status = f"⚠️ GRU fallback (go_backwards=False). Error: {str(e)}"
         GRU0 = layers.Bidirectional(
             tf.keras.layers.GRU(32, return_sequences=True)
         )(cnn1)
@@ -169,7 +174,7 @@ def model_struct(max_len):
         GRU0s = layers.Bidirectional(
             tf.keras.layers.GRU(32, return_sequences=True, go_backwards=True)
         )(cnn1s)
-    except ValueError:
+    except Exception as e:
         # Fallback for newer TF versions
         GRU0s = layers.Bidirectional(
             tf.keras.layers.GRU(32, return_sequences=True)
@@ -397,6 +402,12 @@ with st.sidebar:
             st.info(f"**TensorFlow:** {st.session_state.tf_version}")
         
         # Show warnings
+        if 'gru_status' in st.session_state:
+            if "fallback" in st.session_state.gru_status:
+                st.warning(st.session_state.gru_status)
+            else:
+                st.info(st.session_state.gru_status)
+                
         if 'weights_warning' in st.session_state:
             st.warning(st.session_state.weights_warning)
         if 'model_warning' in st.session_state:
@@ -482,6 +493,14 @@ with col2:
                     st.write(f"**Raw probabilities:** {probabilities}")
                     st.write(f"**Sum:** {np.sum(probabilities):.4f} (should be ~1.0)")
                     st.write(f"**Class indices:** 0=SQL Injection, 1=XSS, 2=Normal")
+                    
+                    st.write("---")
+                    st.write("**Input Analysis:**")
+                    st.write(f"Text Input Shape: {text_index.shape}")
+                    st.write(f"Symbol Input Shape: {symbol_index.shape}")
+                    st.write(f"Non-zero text chars: {np.count_nonzero(text_index)}")
+                    st.write(f"Non-zero symbol chars: {np.count_nonzero(symbol_index)}")
+                    
                     for idx, (cls, prob) in enumerate(zip(classes, probabilities)):
                         st.write(f"  - Index {idx} ({cls}): {float(prob):.6f}")
                 

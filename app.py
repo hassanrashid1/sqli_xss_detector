@@ -160,3 +160,157 @@ if model is None:
     # Show current working directory and file paths for debugging
     st.info(f"**Current working directory:** `{os.getcwd()}`\n**Script directory:** `{script_dir}`")
 
+# Main UI
+st.markdown('<div class="main-header">🛡️ SQL Injection & XSS Detection System</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-header">Advanced Deep Learning Security Scanner</div>', unsafe_allow_html=True)
+
+# Sidebar
+with st.sidebar:
+    st.header("📊 Model Information")
+    if model is not None:
+        st.success("✅ Model Loaded Successfully")
+        
+        # Show loading method
+        if 'model_loaded_from' in st.session_state:
+            st.info(f"**Loaded from:** {st.session_state.model_loaded_from}")
+        
+        st.markdown("---")
+        st.info("**Model Architecture:**\n- Dual Input (Text + Symbols)\n- CNN + Bidirectional GRU\n- Cross-Attention Mechanism\n- 3-Class Classification")
+    else:
+        st.error("❌ Model Not Loaded")
+    
+    st.markdown("---")
+    st.header("ℹ️ About")
+    st.markdown("""
+    This system detects:
+    - **SQL Injection** attacks
+    - **XSS** (Cross-Site Scripting) attacks
+    - **Normal** safe inputs
+    
+    Enter a payload or query string to analyze.
+    """)
+
+# Main content area
+col1, col2 = st.columns([2, 1])
+
+with col1:
+    st.header("🔍 Input Payload")
+    
+    # Example payloads
+    st.subheader("📝 Example Payloads")
+    example_col1, example_col2, example_col3 = st.columns(3)
+    
+    with example_col1:
+        if st.button("SQL Injection Example"):
+            st.session_state.payload_input = "admin' OR '1'='1'--"
+    
+    with example_col2:
+        if st.button("XSS Example"):
+            st.session_state.payload_input = "<script>alert('XSS')</script>"
+    
+    with example_col3:
+        if st.button("Normal Example"):
+            st.session_state.payload_input = "SELECT name FROM users WHERE id = 123"
+    
+    # Text input with key for proper state management
+    input_text = st.text_area(
+        "Enter the payload or query string to analyze:",
+        value=st.session_state.get('payload_input', ''),
+        height=200,
+        placeholder="Example: SELECT * FROM users WHERE id = 1 OR '1'='1'",
+        key="payload_input"
+    )
+    
+    # Analyze button
+    analyze_button = st.button("🚀 Analyze Payload", type="primary", use_container_width=True)
+
+with col2:
+    st.header("📈 Results")
+    
+    if analyze_button and input_text.strip():
+        if model is None:
+            st.error("Model not loaded. Please check the model file.")
+        else:
+            with st.spinner("Analyzing payload..."):
+                # Preprocess input
+                text_index = data2char_index([input_text], max_len=1000)
+                symbol_index = data_to_symbol_tag([input_text], max_len=1000)
+                
+                # Make prediction
+                prediction = model.predict([text_index, symbol_index], verbose=0)
+                
+                # Get class probabilities
+                # Order matches notebook: [SQLInjection, XSS, Normal]
+                classes = ['SQL Injection', 'XSS', 'Normal']
+                probabilities = prediction[0]
+                
+                # Debug: Show raw prediction values (can be removed later)
+                with st.expander("🔍 Debug: Raw Prediction Values"):
+                    st.write(f"**Raw probabilities:** {probabilities}")
+                    st.write(f"**Sum:** {np.sum(probabilities):.4f} (should be ~1.0)")
+                    st.write(f"**Class indices:** 0=SQL Injection, 1=XSS, 2=Normal")
+                    
+                    st.write("---")
+                    st.write("**Input Analysis:**")
+                    st.write(f"Text Input Shape: {text_index.shape}")
+                    st.write(f"Symbol Input Shape: {symbol_index.shape}")
+                    st.write(f"Non-zero text chars: {np.count_nonzero(text_index)}")
+                    st.write(f"Non-zero symbol chars: {np.count_nonzero(symbol_index)}")
+                    
+                    for idx, (cls, prob) in enumerate(zip(classes, probabilities)):
+                        st.write(f"  - Index {idx} ({cls}): {float(prob):.6f}")
+                
+                predicted_class_idx = np.argmax(probabilities)
+                predicted_class = classes[predicted_class_idx]
+                confidence = float(probabilities[predicted_class_idx]) * 100
+                
+                # Display results
+                st.markdown("### Prediction Result")
+                
+                # Color-coded result box
+                if predicted_class == 'Normal':
+                    st.markdown(f"""
+                    <div class="prediction-box safe">
+                        <h2 style="color: #28a745; margin: 0;">✅ {predicted_class}</h2>
+                        <p style="font-size: 1.5rem; margin: 0.5rem 0;"><strong>{confidence:.2f}%</strong> confidence</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                elif predicted_class == 'SQL Injection':
+                    st.markdown(f"""
+                    <div class="prediction-box sql-injection">
+                        <h2 style="color: #dc3545; margin: 0;">⚠️ {predicted_class}</h2>
+                        <p style="font-size: 1.5rem; margin: 0.5rem 0;"><strong>{confidence:.2f}%</strong> confidence</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                else:  # XSS
+                    st.markdown(f"""
+                    <div class="prediction-box xss">
+                        <h2 style="color: #ffc107; margin: 0;">⚠️ {predicted_class}</h2>
+                        <p style="font-size: 1.5rem; margin: 0.5rem 0;"><strong>{confidence:.2f}%</strong> confidence</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                # Probability breakdown
+                st.markdown("### Probability Breakdown")
+                for i, (cls, prob) in enumerate(zip(classes, probabilities)):
+                    # Convert numpy float32 to Python float for st.progress
+                    prob_float = float(prob)
+                    st.progress(prob_float, text=f"{cls}: {prob_float*100:.2f}%")
+                
+                # Detailed probabilities
+                with st.expander("View Detailed Probabilities"):
+                    for cls, prob in zip(classes, probabilities):
+                        st.write(f"**{cls}**: {prob*100:.4f}%")
+    
+    elif analyze_button and not input_text.strip():
+        st.warning("Please enter a payload to analyze.")
+    else:
+        st.info("👆 Enter a payload and click 'Analyze Payload' to get started.")
+
+# Footer
+st.markdown("---")
+st.markdown(
+    "<div style='text-align: center; color: #666;'>Built with Streamlit & TensorFlow | Security Detection System</div>",
+    unsafe_allow_html=True
+)
+

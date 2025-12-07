@@ -1,8 +1,11 @@
+import os
+# Set environment variable to use Keras 2 (tf-keras) with TensorFlow 2.16+
+os.environ['TF_USE_LEGACY_KERAS'] = '1'
+
 import streamlit as st
 import numpy as np
 import tensorflow as tf
 import re
-import os
 from tensorflow.keras import layers
 from tensorflow.keras.layers import GRU, Bidirectional, MultiHeadAttention, Conv1D, MaxPooling1D, Embedding, Dense, Flatten, Add
 
@@ -354,20 +357,10 @@ if model is None:
     
     st.info("**File Status:**\n" + "\n".join(files_status))
     
-    # Version compatibility check
-    st.warning(f"Current TensorFlow Version: {tf.__version__}")
-    if int(tf.__version__.split('.')[1]) >= 16:
-        st.error("""
-        ⚠️ **Compatibility Issue Detected**
-        
-        You are using TensorFlow 2.16+ (Keras 3), which is incompatible with this model (trained with Keras 2).
-        
-        **Solution:**
-        Please downgrade TensorFlow to version 2.15.0:
-        ```bash
-        pip install tensorflow==2.15.0
-        ```
-        """)
+    # Version info
+    st.info(f"TensorFlow Version: {tf.__version__}")
+    if os.environ.get('TF_USE_LEGACY_KERAS'):
+        st.success("Legacy Keras mode enabled (TF_USE_LEGACY_KERAS=1)")
 
     # Show detailed error if available
     if 'error_details' in st.session_state:

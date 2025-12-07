@@ -72,7 +72,8 @@ st.markdown("""
 # Preprocessing functions (from notebook)
 def remove_comment(text):
     """Remove comments from text"""
-    text = re.sub('//.*?\n|/\*.*?\*/', '', text, flags=re.S)
+    # Use raw string (r'') to fix SyntaxWarning for escape sequences
+    text = re.sub(r'//.*?\n|/\*.*?\*/', '', text, flags=re.S)
     text = text.split('--')[0]+"--"
     if '\'' in text:
         removeTarget = text.split('\'')[0]

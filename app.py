@@ -126,217 +126,57 @@ def data_to_symbol_tag(X, max_len, is_remove_comment=False):
     return X_char
 
 # Model structure (from notebook)
+
 def model_struct(max_len):
-    """Define the model architecture"""
+
     pool_siz = 10
     num_heads = 3
-    
-    # Text input layer
-    input_text = tf.keras.layers.Input(shape=(max_len,))
-    # Embedding layer
-    embed1 = tf.keras.layers.Embedding(
-        input_dim=70, 
-        output_dim=105, 
-        input_length=max_len, 
-        trainable=False
-    )(input_text)
-    cnn1 = tf.keras.layers.Conv1D(32, 3, padding='same', strides=1, activation='relu')(embed1)
-    cnn1 = tf.keras.layers.MaxPooling1D(pool_size=pool_siz)(cnn1)
-    # GRU - Match EXACT original structure from notebook
-    # Note: go_backwards=True was in original, but causes issues in newer TF
-    # We'll handle this by trying both structures
-    try:
-        # Try original structure first (with go_backwards=True)
-        GRU0 = layers.Bidirectional(
-            tf.keras.layers.GRU(32, return_sequences=True, go_backwards=True)
-        )(cnn1)
-        if 'gru_status' not in st.session_state:
-            st.session_state.gru_status = "✅ GRU initialized with go_backwards=True"
-    except Exception as e:
-        # Fallback for newer TF versions
-        if 'gru_status' not in st.session_state:
-            st.session_state.gru_status = f"⚠️ GRU fallback (go_backwards=False). Error: {str(e)}"
-        GRU0 = layers.Bidirectional(
-            tf.keras.layers.GRU(32, return_sequences=True)
-        )(cnn1)
-    
-    # Symbol input layer
-    input_symbol = tf.keras.layers.Input(shape=(max_len,))
-    embed2 = tf.keras.layers.Embedding(
-        input_dim=34, 
-        output_dim=51, 
-        input_length=max_len, 
-        trainable=False
-    )(input_symbol)
-    cnn1s = tf.keras.layers.Conv1D(32, 3, padding='same', strides=1, activation='relu')(embed2)
-    cnn1s = tf.keras.layers.MaxPooling1D(pool_size=pool_siz)(cnn1s)
-    # GRU - Match EXACT original structure
-    try:
-        GRU0s = layers.Bidirectional(
-            tf.keras.layers.GRU(32, return_sequences=True, go_backwards=True)
-        )(cnn1s)
-    except Exception as e:
-        # Fallback for newer TF versions
-        GRU0s = layers.Bidirectional(
-            tf.keras.layers.GRU(32, return_sequences=True)
-        )(cnn1s)
-    
-    # Cross Attention
-    CrossAT1 = tf.keras.layers.MultiHeadAttention(num_heads=num_heads, key_dim=1)(GRU0, GRU0s)
-    
-    # Connect the outputs
-    combined = tf.keras.layers.add([GRU0 + CrossAT1, GRU0s + CrossAT1])
-    
-    flat = tf.keras.layers.Flatten()(combined)
-    dnn1 = tf.keras.layers.Dense(3, activation="softmax")(flat)
-    
-    # Output model
-    model = tf.keras.Model(inputs=[input_text, input_symbol], outputs=dnn1)
-    return model
+
+    # ----- TEXT INPUT BRANCH -----
+    input_text = layers.Input(shape=(max_len,), name="text_in")
+    embed1 = layers.Embedding(input_dim=70, output_dim=105, trainable=False)(input_text)
+    cnn1 = layers.Conv1D(32, 3, padding="same", activation="relu")(embed1)
+    cnn1 = layers.MaxPooling1D(pool_size=pool_siz)(cnn1)
+    gru_text = layers.Bidirectional(layers.GRU(32, return_sequences=True))(cnn1)
+
+    # ----- SYMBOL INPUT BRANCH -----
+    input_symbol = layers.Input(shape=(max_len,), name="symbol_in")
+    embed2 = layers.Embedding(input_dim=34, output_dim=51, trainable=False)(input_symbol)
+    cnn2 = layers.Conv1D(32, 3, padding="same", activation="relu")(embed2)
+    cnn2 = layers.MaxPooling1D(pool_size=pool_siz)(cnn2)
+    gru_symbol = layers.Bidirectional(layers.GRU(32, return_sequences=True))(cnn2)
+
+    # ----- CROSS ATTENTION -----
+    # Query = text GRU, Keys/Values = symbol GRU
+    cross_att = layers.MultiHeadAttention(
+        num_heads=num_heads,
+        key_dim=32,     # must match last dim of GRU
+        dropout=0.0
+    )(gru_text, gru_symbol)
+
+    # Combine both sequences + cross attention
+    combined = layers.Add()([gru_text, gru_symbol, cross_att])
+
+    # ----- CLASSIFICATION -----
+    flat = layers.Flatten()(combined)
+    output = layers.Dense(3, activation="softmax")(flat)
+
+    return tf.keras.Model(inputs=[input_text, input_symbol], outputs=output)
 
 # Load model function
 @st.cache_resource
+
 def load_model():
-    """Load the trained model - tries multiple methods"""
-    import warnings
-    import traceback
-    import h5py
-    warnings.filterwarnings('ignore')
-    
-    # Get the directory where this script is located
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    
-    # Define file paths
-    weights_path = os.path.join(script_dir, 'sqli_xss_model_weights.h5')
-    model_h5_path = os.path.join(script_dir, 'sqli_xss_detection_model.h5')
-    model_dir_path = os.path.join(script_dir, 'sqli_xss_detection_model')
-    
-    # Custom objects for loading - use module-level GRUWrapper
-    custom_objects = {
-        'GRU': tf.keras.layers.GRU,
-        'GRUWrapper': GRUWrapper,
-        'Bidirectional': tf.keras.layers.Bidirectional,
-        'MultiHeadAttention': tf.keras.layers.MultiHeadAttention,
-    }
-    
-    # =========================================================================
-    # METHOD 1: Load complete .h5 model (BEST - has exact structure)
-    # =========================================================================
-    if os.path.exists(model_h5_path):
-        try:
-            # Try standard loading first
-            model = tf.keras.models.load_model(
-                model_h5_path, 
-                custom_objects=custom_objects,
-                compile=False
-            )
-            model.compile("adam", "categorical_crossentropy", metrics=["accuracy"])
-            st.session_state.model_loaded_from = ".h5 file (complete model) ✓"
-            return model
-        except Exception as e1:
-            try:
-                # Try with safe_mode=False
-                model = tf.keras.models.load_model(
-                    model_h5_path, 
-                    custom_objects=custom_objects,
-                    compile=False,
-                    safe_mode=False
-                )
-                model.compile("adam", "categorical_crossentropy", metrics=["accuracy"])
-                st.session_state.model_loaded_from = ".h5 file (safe_mode=False) ✓"
-                return model
-            except Exception as e2:
-                st.session_state.h5_error = f".h5 load failed: {str(e2)}"
-    
-    # =========================================================================
-    # METHOD 2: Load weights into recreated structure
-    # =========================================================================
-    if os.path.exists(weights_path):
-        # Check TensorFlow version to decide which structure to use
-        tf_version = tf.__version__
-        st.session_state.tf_version = tf_version
-        
-        try:
-            # First, try to inspect the weights file to understand its structure
-            with h5py.File(weights_path, 'r') as f:
-                weight_names = []
-                def get_names(name, obj):
-                    if isinstance(obj, h5py.Dataset):
-                        weight_names.append(name)
-                f.visititems(get_names)
-                st.session_state.weight_count = len(weight_names)
-        except Exception as e:
-            st.session_state.weight_count = "unknown"
-        
-        # Try creating model and loading weights
-        try:
-            # Create model structure (will use fallback if go_backwards fails)
-            model = model_struct(max_len=1000)
-            
-            # Build model
-            dummy_text = np.zeros((1, 1000), dtype=np.int32)
-            dummy_symbol = np.zeros((1, 1000), dtype=np.int32)
-            _ = model([dummy_text, dummy_symbol])
-            
-            # Try loading weights
-            try:
-                model.load_weights(weights_path, by_name=False)
-                st.session_state.weights_loaded_method = "strict (by_name=False)"
-            except:
-                try:
-                    model.load_weights(weights_path, by_name=True)
-                    st.session_state.weights_loaded_method = "by_name=True"
-                except:
-                    model.load_weights(weights_path, skip_mismatch=True)
-                    st.session_state.weights_loaded_method = "skip_mismatch (may be incorrect!)"
-                    st.session_state.weights_warning = "⚠️ Structure mismatch detected!"
-            
-            model.compile("adam", "categorical_crossentropy", metrics=["accuracy"])
-            st.session_state.model_loaded_from = "weights file (recreated structure)"
-            
-            # Test if model produces varied outputs
-            test_results = []
-            test_inputs = [
-                "admin' OR '1'='1'--",  # SQL Injection
-                "<script>alert('x')</script>",  # XSS
-                "SELECT id FROM users WHERE id = 5"  # Normal
-            ]
-            for test_input in test_inputs:
-                text_idx = data2char_index([test_input], max_len=1000)
-                symbol_idx = data_to_symbol_tag([test_input], max_len=1000)
-                pred = model.predict([text_idx, symbol_idx], verbose=0)
-                test_results.append(np.argmax(pred[0]))
-            
-            # Check if all predictions are the same (bad sign)
-            if len(set(test_results)) == 1:
-                st.session_state.model_warning = f"⚠️ Model predicts same class ({test_results[0]}) for all test inputs - may not be working correctly!"
-            else:
-                st.session_state.model_status = f"✓ Model produces varied predictions: {test_results}"
-            
-            return model
-            
-        except Exception as e:
-            st.session_state.error_details = f"Weights loading failed: {str(e)}\n{traceback.format_exc()}"
-    
-    # =========================================================================
-    # METHOD 3: SavedModel format
-    # =========================================================================
-    if os.path.exists(model_dir_path):
-        try:
-            model = tf.keras.models.load_model(model_dir_path, compile=False)
-            model.compile("adam", "categorical_crossentropy", metrics=["accuracy"])
-            st.session_state.model_loaded_from = "SavedModel format ✓"
-            return model
-        except Exception as e:
-            pass
-    
-    return None
+    try:
+        model = tf.keras.models.load_model('model.keras')
+        return model
+    except Exception as e:
+        st.error(f"Error loading model: {e}")
+        return None
 
 # Initialize model
 script_dir = os.path.dirname(os.path.abspath(__file__))
-weights_path = os.path.join(script_dir, 'sqli_xss_model_weights.h5')
-model_h5_path = os.path.join(script_dir, 'sqli_xss_detection_model.h5')
-model_dir_path = os.path.join(script_dir, 'sqli_xss_detection_model')
+
 
 model = load_model()
 
@@ -344,46 +184,7 @@ model = load_model()
 if model is None:
     st.error("❌ Could not load model from any available format.")
     
-    # Check which files exist
-    files_status = []
-    if os.path.exists(weights_path):
-        files_status.append(f"✅ `sqli_xss_model_weights.h5` exists at: {weights_path}")
-    else:
-        files_status.append(f"❌ `sqli_xss_model_weights.h5` not found at: {weights_path}")
     
-    if os.path.exists(model_h5_path):
-        files_status.append(f"✅ `sqli_xss_detection_model.h5` exists at: {model_h5_path}")
-    else:
-        files_status.append(f"❌ `sqli_xss_detection_model.h5` not found at: {model_h5_path}")
-    
-    if os.path.exists(model_dir_path):
-        files_status.append(f"✅ `sqli_xss_detection_model/` directory exists at: {model_dir_path}")
-    else:
-        files_status.append(f"❌ `sqli_xss_detection_model/` directory not found at: {model_dir_path}")
-    
-    st.info("**File Status:**\n" + "\n".join(files_status))
-    
-    # Version info
-    st.info(f"TensorFlow Version: {tf.__version__}")
-    if os.environ.get('TF_USE_LEGACY_KERAS'):
-        st.success("Legacy Keras mode enabled (TF_USE_LEGACY_KERAS=1)")
-
-    # Show detailed error if available
-    if 'error_details' in st.session_state:
-        with st.expander("View Detailed Error Information", expanded=True):
-            st.code(st.session_state.error_details)
-    
-    # Show current working directory and file paths for debugging
-    st.info(f"**Current working directory:** `{os.getcwd()}`\n**Script directory:** `{script_dir}`")
-    
-    st.info("""
-    **Troubleshooting:**
-    - If weights file exists but fails to load, the model structure might not match
-    - Check TensorFlow version compatibility (try: `pip install tensorflow==2.13.0`)
-    - Ensure the model structure matches the saved weights exactly
-    - Try running the app from the directory containing the model files
-    """)
-
 # Main UI
 st.markdown('<div class="main-header">🛡️ SQL Injection & XSS Detection System</div>', unsafe_allow_html=True)
 st.markdown('<div class="sub-header">Advanced Deep Learning Security Scanner</div>', unsafe_allow_html=True)
@@ -393,33 +194,7 @@ with st.sidebar:
     st.header("📊 Model Information")
     if model is not None:
         st.success("✅ Model Loaded Successfully")
-        
-        # Show loading method
-        if 'model_loaded_from' in st.session_state:
-            st.info(f"**Loaded from:** {st.session_state.model_loaded_from}")
-        if 'weights_loaded_method' in st.session_state:
-            st.info(f"**Weights method:** {st.session_state.weights_loaded_method}")
-        if 'tf_version' in st.session_state:
-            st.info(f"**TensorFlow:** {st.session_state.tf_version}")
-        
-        # Show warnings
-        if 'gru_status' in st.session_state:
-            if "fallback" in st.session_state.gru_status:
-                st.warning(st.session_state.gru_status)
-            else:
-                st.info(st.session_state.gru_status)
-                
-        if 'weights_warning' in st.session_state:
-            st.warning(st.session_state.weights_warning)
-        if 'model_warning' in st.session_state:
-            st.error(st.session_state.model_warning)
-        if 'model_status' in st.session_state:
-            st.success(st.session_state.model_status)
-        if 'h5_error' in st.session_state:
-            with st.expander("⚠️ .h5 loading failed"):
-                st.code(st.session_state.h5_error)
-        
-        st.markdown("---")
+      
         st.info("**Model Architecture:**\n- Dual Input (Text + Symbols)\n- CNN + Bidirectional GRU\n- Cross-Attention Mechanism\n- 3-Class Classification")
     else:
         st.error("❌ Model Not Loaded")

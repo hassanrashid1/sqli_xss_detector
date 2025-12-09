@@ -210,7 +210,7 @@ with col1:
     
     with example_col3:
         if st.button("Normal Example"):
-            st.session_state.payload_input = "SELECT name FROM users WHERE id = 123"
+            st.session_state.payload_input = "Hassan Rashid"
     
     # Text input with key for proper state management
     input_text = st.text_area(
